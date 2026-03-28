@@ -1,0 +1,449 @@
+\documentclass[12pt]{article}
+
+\usepackage{sbc-template}
+\usepackage{graphicx,url}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+
+\sloppy
+
+\title{EcoLex RAG: Sistema HyPA-RAG com Legal-BERTimbau para\\ Suporte Explicavel a Decisao em Gestao Ambiental Brasileira}
+
+\author{Delvek da Silva Venceslau de Sousa\inst{1}}
+
+\address{Universidade Federal do Para (UFPA) -- Belem, PA -- Brasil
+  \email{delvek.sousa@icen.ufpa.br}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Brazilian environmental management demands frequent consultation of an extensive and hierarchically complex legislative corpus, a task that poses significant challenges to public administrators and environmental analysts. This paper presents EcoLex RAG, a Hybrid Parameter-Adaptive Retrieval-Augmented Generation (HyPA-RAG) system for explainable decision support in environmental management. The proposed architecture integrates three retrieval mechanisms -- BM25 (sparse), Legal-BERTimbau/FAISS (dense), and a legal Knowledge Graph -- unified via Reciprocal Rank Fusion, with adaptive parameters controlled by a query complexity classifier. Response generation is performed by Mistral 7B Instruct in FP16, with structured prompts requiring exact citation of articles, paragraphs, and clauses. An ablation study with 100 queries across 6 legislative acts demonstrated that the HyPA-RAG configuration achieves competitive retrieval and citation performance (65\% Law Retrieval, 48\% Citation Article Rate) using on average only 6.8 sources compared to 10.0 in static configurations, evidencing superior context efficiency. For medium-complexity queries, the system reaches 54\% Citation Article Rate, outperforming all other configurations. Results indicate that parametric adaptation enables more efficient RAG systems for the Brazilian legal-environmental domain.
+
+\textbf{Keywords:} Retrieval-Augmented Generation, Environmental Legislation, HyPA-RAG, Legal-BERTimbau, Explainable Artificial Intelligence.
+\end{abstract}
+
+\begin{resumo}
+A gestao ambiental brasileira demanda consulta frequente a um corpus legislativo extenso e hierarquicamente complexo, tarefa que impoe desafios significativos a gestores publicos e analistas ambientais. Este trabalho apresenta o EcoLex RAG, um sistema de Geracao Aumentada por Recuperacao com Parametros Hibridos Adaptativos (HyPA-RAG) voltado ao suporte explicavel a decisao em gestao ambiental. A arquitetura proposta integra tres mecanismos de recuperacao -- BM25 (\textit{sparse}), Legal-BERTimbau/FAISS (\textit{dense}) e Knowledge Graph legal -- unificados via Reciprocal Rank Fusion, com parametros adaptativos controlados por um classificador de complexidade de consultas. A geracao de respostas e realizada pelo Mistral 7B Instruct em FP16, com prompts estruturados que exigem citacao exata de artigos, paragrafos e incisos. Um estudo de ablacao com 100 consultas sobre 6 legislacoes demonstrou que a configuracao HyPA-RAG alcanca desempenho competitivo em recuperacao e citacao (65\% em Lei Retrieval, 48\% em Citation Article Rate) utilizando em media apenas 6,8 fontes, contra 10,0 das configuracoes estaticas, evidenciando eficiencia superior na economia de contexto. Em consultas de complexidade media, o sistema atinge 54\% em Citation Article Rate, superando todas as demais configuracoes. Os resultados indicam que a adaptacao parametrica viabiliza sistemas RAG mais eficientes para o dominio juridico-ambiental brasileiro.
+
+\textbf{Palavras-chave:} Geracao Aumentada por Recuperacao, Legislacao Ambiental, HyPA-RAG, Legal-BERTimbau, Inteligencia Artificial Explicavel.
+\end{resumo}
+
+\section{Introducao}
+
+O Brasil detem um dos arcaboucos normativos ambientais mais extensos e sofisticados do planeta, abrangendo desde o Codigo Florestal (Lei 12.651/2012), que disciplina a protecao de Areas de Preservacao Permanente (APP) e Reservas Legais, ate a Politica Nacional do Meio Ambiente (Lei 6.938/1981), que institui o Sistema Nacional do Meio Ambiente (SISNAMA), passando pelo Sistema Nacional de Unidades de Conservacao (Lei 9.985/2000), a Lei de Crimes Ambientais (Lei 9.605/1998) e diversas resolucoes do Conselho Nacional do Meio Ambiente (CONAMA). A estrutura hierarquica dessas normas -- organizadas em artigos, paragrafos, incisos, alineas e dispositivos remissivos entre leis distintas -- impoe uma carga cognitiva substancial a gestores publicos, analistas ambientais e operadores do direito ambiental que necessitam fundamentar suas decisoes em dispositivos legais especificos \cite{robertson:2009}.
+
+Esse cenario adquire relevancia estrategica inedita no contexto pos-COP30 (Conferencia das Nacoes Unidas sobre Mudancas Climaticas), realizada em Belem do Para em novembro de 2025, evento que reposicionou o Brasil -- e particularmente a regiao amazonica -- no epicentro das discussoes globais sobre governanca climatica e bioeconomia. As metas assumidas pelo pais durante a COP30 exigem, em termos praticos, que orgaos ambientais estaduais e municipais operem com maior agilidade e precisao no enquadramento legal de atividades economicas, licenciamentos e fiscalizacoes. A ausencia de ferramentas computacionais adequadas para consulta inteligente a legislacao constitui, portanto, um gargalo operacional com implicacoes diretas sobre a efetividade da governanca ambiental brasileira.
+
+No campo da Inteligencia Artificial, a tecnica de Geracao Aumentada por Recuperacao (RAG -- \textit{Retrieval-Augmented Generation}) \cite{lewis:2020} emergiu como paradigma dominante para a construcao de sistemas de pergunta-resposta fundamentados em bases de conhecimento, mitigando o problema de alucinacao factual em Modelos de Linguagem de Grande Escala (LLMs). Entretanto, a aplicacao direta de arquiteturas RAG convencionais ao dominio juridico-ambiental brasileiro enfrenta tres lacunas fundamentais: (i) modelos de \textit{embedding} genericos nao capturam adequadamente a semantica de termos legais em portugues, como ``Area de Preservacao Permanente'', ``Reserva Legal'' ou ``outorga de recurso hidrico''; (ii) a ausencia de mecanismos que explorem a estrutura hierarquica intrinseca da legislacao (Lei $>$ Capitulo $>$ Secao $>$ Artigo $>$ Paragrafo $>$ Inciso $>$ Alinea) desperdica informacao relacional valiosa; e (iii) a rigidez parametrica de sistemas RAG tradicionais -- que operam com valores fixos de documentos recuperados independentemente da complexidade da consulta -- conduz a ineficiencia tanto na economia de contexto quanto na qualidade da resposta.
+
+Recentemente, \cite{kalra:2024} propuseram o HyPA-RAG (\textit{Hybrid Parameter-Adaptive Retrieval-Augmented Generation}), uma arquitetura que combina recuperacao hibrida (\textit{sparse} + \textit{dense} + \textit{knowledge graph}) com adaptacao parametrica baseada na complexidade da consulta, demonstrando resultados promissores no dominio juridico anglofono. Contudo, a transferencia direta dessa arquitetura ao contexto legal brasileiro permanece inexplorada na literatura.
+
+O presente trabalho propoe o \textbf{EcoLex RAG}, um sistema HyPA-RAG adaptado ao dominio juridico-ambiental brasileiro, cujas contribuicoes principais sao:
+
+\begin{enumerate}
+\item \textbf{Recuperacao hibrida tripla adaptada ao dominio legal brasileiro}, integrando BM25 (\textit{sparse}), Legal-BERTimbau/FAISS (\textit{dense}) \cite{rufimelo:2022} e um Knowledge Graph legal com triplets extraidos da estrutura normativa, unificados via Reciprocal Rank Fusion (RRF) \cite{cormack:2009};
+\item \textbf{Classificador de complexidade de consultas} baseado em heuristicas juridico-linguisticas, que governa a adaptacao de parametros ($top\_k$ e \textit{query rewrites}) por nivel de complexidade (simples, medio, complexo);
+\item \textbf{Pipeline de geracao explicavel} com Mistral 7B Instruct \cite{jiang:2023} em FP16, estruturado para produzir respostas com citacao exata de dispositivos legais (artigo, paragrafo, inciso);
+\item \textbf{Estudo de ablacao abrangente} com 100 consultas distribuidas em tres niveis de complexidade sobre 6 legislacoes ambientais, avaliando sistematicamente a contribuicao de cada componente da arquitetura.
+\end{enumerate}
+
+O restante deste artigo esta organizado da seguinte forma: a Secao 2 revisa os trabalhos relacionados; a Secao 3 detalha a metodologia e a arquitetura do sistema; a Secao 4 descreve o protocolo experimental; a Secao 5 apresenta e discute os resultados; e a Secao 6 conclui o trabalho com direcionamentos futuros.
+
+\section{Trabalhos Relacionados}
+
+Esta secao situa o EcoLex RAG no panorama da literatura em tres eixos: Geracao Aumentada por Recuperacao, modelos de linguagem para o portugues juridico e aplicacoes de IA na gestao ambiental.
+
+\subsection{Geracao Aumentada por Recuperacao (RAG)}
+
+\cite{lewis:2020} formalizaram o paradigma RAG ao demonstrar que a concatenacao de documentos recuperados de uma base de conhecimento ao \textit{prompt} de um modelo \textit{seq2seq} (\textit{sequence-to-sequence}) produz respostas mais factuais do que modelos puramente generativos. Desde entao, a arquitetura RAG tornou-se o padrao \textit{de facto} para sistemas de pergunta-resposta em dominios especializados, sendo adotada em contextos medicos, juridicos e financeiros.
+
+A recuperacao \textit{sparse} via BM25 \cite{robertson:2009} permanece como \textit{baseline} robusto, particularmente eficaz na correspondencia de termos exatos -- propriedade critica no dominio legal, onde identificadores normativos como ``Art. 4\textsuperscript{o}'' ou ``Resolucao CONAMA 357'' constituem tokens de alta especificidade. Paralelamente, a recuperacao \textit{dense} baseada em modelos de \textit{embedding} captura relacoes semanticas que escapam a correspondencia lexica, sendo especialmente util em consultas formuladas em linguagem natural por usuarios nao especializados.
+
+\subsection{HyPA-RAG: Recuperacao Hibrida com Parametros Adaptativos}
+
+\cite{kalra:2024} introduziram o HyPA-RAG (\textit{Hybrid Parameter-Adaptive Retrieval-Augmented Generation}), uma extensao do paradigma RAG que endereca duas limitacoes fundamentais das arquiteturas convencionais. Primeiramente, o HyPA-RAG combina tres modalidades de recuperacao -- \textit{sparse} (BM25), \textit{dense} (\textit{embeddings}) e \textit{graph-based} (Knowledge Graph) -- mediante Reciprocal Rank Fusion (RRF), proposta originalmente por \cite{cormack:2009}. Em segundo lugar, a arquitetura classifica cada consulta em niveis de complexidade e adapta dinamicamente os parametros de recuperacao (numero de documentos, reformulacoes de consulta), evitando tanto a subrecuperacao em consultas complexas quanto o desperdicio de contexto em consultas simples. Os autores demonstraram ganhos significativos em benchmarks juridicos em lingua inglesa, particularmente em consultas que exigem raciocinio \textit{multi-hop} entre dispositivos normativos.
+
+A formula do RRF, que constitui o nucleo da fusao de rankings no EcoLex RAG, e definida como:
+
+\begin{equation}
+\text{RRF}_{\text{score}}(d) = \sum_{r \in R} \frac{1}{k + \text{rank}_r(d)}
+\label{eq:rrf}
+\end{equation}
+
+\noindent onde $R$ denota o conjunto de listas de ranking (BM25, semantico, Knowledge Graph), $\text{rank}_r(d)$ e a posicao do documento $d$ na lista $r$, e $k = 60$ e a constante de suavizacao do \textit{paper} original \cite{cormack:2009}. A fusao por RRF dispensa calibracao de pesos entre modelos heterogeneos, propriedade particularmente vantajosa quando os escores dos diferentes \textit{retrievers} residem em escalas incomparaveis.
+
+\subsection{Modelos de Linguagem para o Portugues Juridico}
+
+O BERTimbau \cite{souza:2020} estabeleceu o primeiro modelo BERT pre-treinado especificamente para o portugues brasileiro, treinado sobre um corpus de 2,7 bilhoes de tokens extraidos do \textit{BrWaC} (\textit{Brazilian Web as Corpus}). Subsequentemente, \cite{rufimelo:2022} apresentaram o Legal-BERTimbau, uma variante do BERTimbau submetida a treinamento continuo sobre um corpus juridico em portugues, demonstrando ganhos consistentes em tarefas de \textit{Semantic Textual Similarity} (STS) no dominio legal. O modelo \texttt{rufimelo/Legal-BERTimbau-sts-base-ma}, com dimensao de \textit{embedding} de 768, e particularmente adequado para a geracao de representacoes vetoriais de trechos legislativos brasileiros, capturando nuances semanticas que modelos genericos nao discriminam.
+
+Para a geracao de respostas, o Mistral 7B \cite{jiang:2023} emergiu como uma alternativa eficiente a modelos de maior escala, oferecendo desempenho competitivo com LLMs de 13 bilhoes de parametros gracas ao mecanismo de atencao de janela deslizante (\textit{Sliding Window Attention}) e agrupamento de consultas (\textit{Grouped-Query Attention}). A variante Instruct, ajustada via \textit{Reinforcement Learning from Human Feedback} (RLHF), demonstra capacidade superior de seguir instrucoes estruturadas, propriedade essencial para a geracao de respostas com citacao legal obrigatoria.
+
+\subsection{IA Aplicada a Gestao Ambiental e Explicabilidade}
+
+A interseccao entre IA e gestao ambiental tem avancado substancialmente, com aplicacoes que vao desde a deteccao de desmatamento por visao computacional ate a modelagem preditiva de dinamicas climaticas \cite{wcama:2025}. Contudo, a vertente de suporte a decisao juridico-ambiental permanece subexplorada. No contexto da governanca publica, a demanda por Inteligencia Artificial Explicavel (XAI -- \textit{Explainable Artificial Intelligence}) tornou-se imperativa: decisoes administrativas fundamentadas em recomendacoes de IA devem ser auditaveis e rastreaveis aos dispositivos normativos que as embasam. Sistemas RAG com citacao de fontes representam, nesse sentido, uma forma nativa de explicabilidade, na medida em que cada afirmacao da resposta pode ser verificada contra o trecho legislativo original.
+
+A edicao de 2025 do WCAMA evidenciou a maturidade da ecoinformatica brasileira e a crescente adocao de tecnicas como RAG e XAI para problemas ambientais, sinalizando que o campo esta receptivo a contribuicoes que integrem processamento de linguagem natural, representacao de conhecimento legal e suporte a decisao governamental.
+
+\section{Metodologia}
+
+Esta secao detalha a arquitetura do sistema EcoLex RAG, abordando cada componente do pipeline HyPA-RAG: classificacao de complexidade, recuperacao tripla, fusao de rankings, adaptacao parametrica e geracao de respostas explicaveis.
+
+\subsection{Visao Geral da Arquitetura}
+
+O EcoLex RAG implementa um pipeline HyPA-RAG completo, cujo fluxo de processamento e ilustrado na Figura~\ref{fig:arquitetura}. Uma consulta em linguagem natural ingressada pelo gestor ambiental percorre cinco estagios sequenciais: (1) classificacao de complexidade; (2) adaptacao de parametros; (3) recuperacao tripla com fusao; (4) geracao de resposta com LLM; e (5) entrega de resposta explicavel com fontes exatas.
+
+\begin{figure}[ht]
+\centering
+\begin{small}
+\begin{verbatim}
+  Consulta do Gestor Ambiental
+              |
+              v
+  +----------------------------+
+  | Classificador de           |
+  | Complexidade               |
+  | (heuristicas linguisticas) |
+  +----------------------------+
+              |
+              v
+  +----------------------------+
+  | Parametros Adaptativos     |
+  | k=5/10/15                  |
+  | rewrites=0/1/3             |
+  +----------------------------+
+              |
+    +---------+---------+
+    |         |         |
+    v         v         v
++--------+ +--------+ +--------+
+|  BM25  | | Legal- | | Know-  |
+| Okapi  | | BERT-  | | ledge  |
+|(sparse)| | imbau  | | Graph  |
+|        | | +FAISS | |(triplets|
+|        | |(dense) | | legais)|
++---+----+ +---+----+ +---+----+
+    |         |         |
+    +---------+---------+
+              |
+              v
+  +----------------------------+
+  | Reciprocal Rank Fusion     |
+  | RRF(d) = Sum 1/(k+rank(d))|
+  +----------------------------+
+              |
+              v
+  +----------------------------+
+  | Mistral 7B Instruct (FP16) |
+  | Prompt: citacao obrigatoria|
+  | Estrutura: FUNDAMENTACAO   |
+  |   LEGAL > ANALISE >        |
+  |   CONCLUSAO                |
+  +----------------------------+
+              |
+              v
+  +----------------------------+
+  | Resposta Explicavel        |
+  | + Fontes com Lei/Art/Par   |
+  | + Metadados HyPA           |
+  +----------------------------+
+\end{verbatim}
+\end{small}
+\caption{Arquitetura do pipeline HyPA-RAG do EcoLex RAG. A consulta e classificada em tres niveis de complexidade, que governam os parametros adaptativos dos tres \textit{retrievers} operando em paralelo. A fusao via RRF alimenta o LLM com contexto legislativo ranqueado, e a resposta e entregue com citacao obrigatoria de fontes.}
+\label{fig:arquitetura}
+\end{figure}
+
+\subsection{Classificador de Complexidade}
+
+O classificador de complexidade constitui o componente que diferencia a abordagem HyPA-RAG de sistemas RAG tradicionais com parametros estaticos. Dado que consultas juridicas variam enormemente em profundidade -- de perguntas factuais diretas (``O que e APP?'') a consultas comparativas \textit{multi-hop} (``Compare as exigencias de APP e Reserva Legal para propriedade na Amazonia Legal'') --, a adaptacao parametrica permite alocar recursos computacionais proporcionalmente a demanda informacional de cada consulta.
+
+O classificador opera sobre heuristicas linguisticas especificas do dominio juridico-ambiental, computando um \textit{complexity score} $s$ baseado em seis indicadores extraidos da consulta $q$:
+
+Seja $q$ uma consulta tokenizada em palavras $w_1, w_2, \ldots, w_n$. O escore de complexidade e calculado como:
+
+\begin{equation}
+s(q) = \min(\lambda_L, 3) + 2 \cdot \mathbb{1}_{C}(q) + \mathbb{1}_{D}(q) + 2 \cdot \mathbb{1}_{M}(q) + \mathbb{1}_{?}(q) + \mathbb{1}_{\wedge}(q) + \mathbb{1}_{|q|>30}
+\label{eq:complexity}
+\end{equation}
+
+\noindent onde:
+\begin{itemize}
+\item $\lambda_L = |\{t \in \mathcal{T}_L : t \subset q\}|$ e a contagem de termos legais reconhecidos, limitada a 3, com $\mathcal{T}_L$ sendo o lexico de 36 termos juridico-ambientais (e.g., ``reserva legal'', ``licenciamento'', ``CONAMA'', ``outorga'', ``recurso hidrico'');
+\item $\mathbb{1}_{C}(q)$ indica presenca de marcadores comparativos (``compare'', ``diferenca'', ``versus'');
+\item $\mathbb{1}_{D}(q)$ indica presenca de marcadores condicionais (``se'', ``caso'', ``na hipotese de'');
+\item $\mathbb{1}_{M}(q)$ indica presenca de marcadores \textit{multi-hop} (``adicionalmente'', ``cumulativamente'', ``a luz de'');
+\item $\mathbb{1}_{?}(q)$ indica mais de um ponto de interrogacao;
+\item $\mathbb{1}_{\wedge}(q)$ indica duas ou mais conjuncoes (``e'', ``ou'', ``mas'', ``porem'');
+\item $\mathbb{1}_{|q|>30}$ indica que a consulta excede 30 palavras.
+\end{itemize}
+
+A classificacao final mapeia o escore a tres niveis:
+
+\begin{equation}
+\text{complexidade}(q) = \begin{cases} \texttt{simple} & \text{se } s(q) \leq 2 \\ \texttt{medium} & \text{se } 3 \leq s(q) \leq 5 \\ \texttt{complex} & \text{se } s(q) \geq 6 \end{cases}
+\label{eq:classification}
+\end{equation}
+
+\subsection{Recuperacao Tripla}
+
+O modulo de recuperacao opera simultaneamente tres estrategias complementares para maximizar a cobertura e a precisao na identificacao de trechos legislativos relevantes.
+
+\textbf{BM25 Okapi (\textit{sparse}).} O algoritmo BM25 \cite{robertson:2009} realiza recuperacao baseada em correspondencia lexica, computando a relevancia de cada \textit{chunk} legislativo em funcao da frequencia dos termos da consulta, ponderada pela frequencia inversa no corpus e pelo comprimento do documento. A tokenizacao e realizada por \textit{whitespace splitting} em \textit{lowercase}, sem \textit{stemming}, preservando a integridade de identificadores normativos (e.g., ``Art. 4\textsuperscript{o}'', ``CONAMA 357''). O indice BM25 e construido sobre 473 \textit{chunks} extraidos de 6 legislacoes, armazenados em formato JSON.
+
+\textbf{Legal-BERTimbau + FAISS (\textit{dense}).} A recuperacao densa utiliza o modelo \texttt{rufimelo/Legal-BERTimbau-sts-base-ma} \cite{rufimelo:2022} para gerar \textit{embeddings} de dimensao $d = 768$ para cada \textit{chunk} legislativo. Os vetores sao normalizados via $L_2$ e indexados em uma estrutura FAISS \texttt{IndexFlatIP} (\textit{Inner Product}), que computa a similaridade por produto interno (equivalente a similaridade cosseno apos normalizacao). A busca por similaridade retorna os $k$ \textit{chunks} mais proximos ao vetor da consulta no espaco semantico.
+
+\textbf{Knowledge Graph Legal (\textit{graph-based}).} O Knowledge Graph (KG) e construido a partir da estrutura hierarquica intrinseca da legislacao brasileira. Um extrator baseado em expressoes regulares processa o texto legislativo e gera triplets no formato $(sujeito, relacao, objeto)$, onde as relacoes capturam quatro tipos de vinculos:
+\begin{itemize}
+\item \texttt{pertence\_a}: artigo pertence a uma lei;
+\item \texttt{detalha}: paragrafo detalha um artigo;
+\item \texttt{define}: inciso define um conceito dentro de um artigo;
+\item \texttt{definido\_em}: conceito legal e definido em um artigo especifico;
+\item \texttt{estabelece\_medida}: artigo estabelece medida quantitativa (metros, hectares, percentuais).
+\end{itemize}
+
+A busca no KG opera por correspondencia de termos entre a consulta e os campos dos triplets, com \textit{boost} de 0,3 para \textit{matches} no campo \texttt{subject} e 0,2 para \textit{matches} no campo \texttt{object}. Cada triplet retornado e formatado como \textit{chunk} textual contendo a relacao e o contexto associado (limitado a 300 caracteres).
+
+\subsection{Reciprocal Rank Fusion}
+
+Os resultados dos tres \textit{retrievers} sao unificados via Reciprocal Rank Fusion (RRF) \cite{cormack:2009}. Para cada documento $d$ presente em ao menos uma lista de resultados, o escore RRF e calculado como:
+
+\begin{equation}
+\text{RRF}_{\text{score}}(d) = \sum_{r \in \{BM25, Dense, KG\}} \frac{1}{k + \text{rank}_r(d)}
+\label{eq:rrf_detail}
+\end{equation}
+
+\noindent com $k = 60$ (constante de suavizacao padrao). Documentos ausentes em uma lista nao contribuem para a soma. Os documentos fusionados sao ordenados por escore RRF decrescente, e os top-$n$ sao selecionados como contexto para o LLM. A deduplicacao e realizada por identidade dos primeiros 200 caracteres do conteudo, garantindo que \textit{chunks} identicos recuperados por \textit{retrievers} distintos nao sejam contados duplamente. O metadado \texttt{retrieval\_method} do \textit{chunk} fusionado registra todos os metodos que o recuperaram (e.g., ``bm25+semantic''), viabilizando auditoria do pipeline.
+
+\subsection{Parametros Adaptativos}
+
+A adaptacao parametrica constitui o nucleo diferenciador da arquitetura HyPA-RAG em relacao a sistemas RAG convencionais. Com base na classificacao de complexidade da consulta (Secao 3.2), o pipeline ajusta dois parametros: (i) o numero de documentos recuperados por cada \textit{retriever} ($top\_k$) e (ii) o numero de reformulacoes de consulta (\textit{query rewrites}) geradas pelo LLM para ampliar a cobertura lexica e semantica da busca. A Tabela~\ref{tab:parametros} apresenta a configuracao adotada.
+
+\begin{table}[ht]
+\centering
+\caption{Parametros adaptativos do HyPA-RAG por nivel de complexidade.}
+\label{tab:parametros}
+\begin{tabular}{cccp{5.5cm}}
+\toprule
+\textbf{Complexidade} & \textbf{$top\_k$} & \textbf{\textit{Query Rewrites}} & \textbf{Exemplo de consulta} \\
+\midrule
+Simples & 5 & 0 & ``O que e APP?'' \\
+Media & 10 & 1 & ``Qual a faixa de APP para rio de 10m?'' \\
+Complexa & 15 & 3 & ``Compare as exigencias de APP e Reserva Legal para propriedade na Amazonia Legal'' \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A reducao do $top\_k$ para consultas simples economiza contexto no \textit{prompt} do LLM, diminuindo o custo computacional de inferencia e mitigando o risco de ``diluicao'' da resposta por \textit{chunks} irrelevantes. As reformulacoes de consulta (\textit{query rewrites}) sao geradas pelo proprio Mistral 7B com temperatura de 0,3, produzindo variacoes linguisticas da pergunta original (e.g., sinonimos de termos legais, reestruturacoes sintaticas) que ampliam o espaco de busca nos \textit{retrievers}.
+
+\subsection{Geracao com Mistral 7B Instruct}
+
+A geracao de respostas e realizada pelo modelo Mistral 7B Instruct v0.3 \cite{jiang:2023}, carregado em precisao FP16 (\textit{float16}) com mapeamento automatico de dispositivo (\texttt{device\_map="auto"}), exigindo aproximadamente 14 GB de VRAM. O pipeline de geracao utiliza a biblioteca Hugging Face \texttt{transformers} com os seguintes hiperparametros: \texttt{max\_new\_tokens=1024}, \texttt{temperature=0.1} e \texttt{do\_sample=True}.
+
+O \textit{prompt} do sistema e estruturado com seis regras obrigatorias que constituem o mecanismo de explicabilidade do EcoLex RAG: (1) responder exclusivamente com base nos trechos legislativos fornecidos; (2) citar a fonte exata (lei, artigo, paragrafo, inciso); (3) declarar explicitamente a insuficiencia de informacao quando aplicavel; (4) utilizar linguagem tecnica acessivel a gestores publicos; (5) estruturar a resposta em FUNDAMENTACAO LEGAL, ANALISE e CONCLUSAO; e (6) nao inventar dispositivos legais ausentes do contexto.
+
+O contexto legislativo e formatado como sequencia de \textit{chunks}, cada um prefixado com os metadados \texttt{[lei | artigo]}, limitados a 800 caracteres e ate 3.000 tokens estimados no total, garantindo operacao dentro da janela de contexto do modelo sem exceder a capacidade da VRAM.
+
+\subsection{Knowledge Graph Legal: Extracao de Triplets}
+
+A construcao do Knowledge Graph legal e realizada por um extrator baseado em expressoes regulares que processa o texto integral de cada legislacao. O extrator reconhece cinco padroes estruturais:
+
+\begin{enumerate}
+\item \textbf{Artigos}: padrao \texttt{Art.\textbackslash s*\textbackslash d+[\textbackslash w-]*} identifica todos os artigos e associa cada um a lei correspondente via triplet $(Art.\ X, pertence\_a, Lei\ Y)$;
+\item \textbf{Paragrafos}: padrao \texttt{\S\textbackslash s*\textbackslash d+} identifica paragrafos e os vincula ao artigo pai via $(Art.\ X, \S Y, detalha, Art.\ X)$;
+\item \textbf{Incisos}: identificadores romanos (I, II, III, \ldots) sao extraidos e vinculados ao artigo via $(Art.\ X, Inciso\ Y, define, Art.\ X)$;
+\item \textbf{Definicoes}: padroes como ``entende-se por'', ``considera-se'' e ``define-se como'' extraem conceitos definidos na legislacao;
+\item \textbf{Medidas quantitativas}: padroes numericos seguidos de unidades (metros, hectares, percentuais) extraem limites quantitativos estabelecidos pela norma.
+\end{enumerate}
+
+Sobre as 6 legislacoes da base de conhecimento, o extrator gerou 1.714 triplets, constituindo uma representacao estruturada das relacoes normativas que complementa a recuperacao textual pura.
+
+\section{Experimentos}
+
+Esta secao descreve a base de conhecimento, o \textit{dataset} de avaliacao, as configuracoes de ablacao, as metricas empregadas e o ambiente de \textit{hardware}.
+
+\subsection{Base de Conhecimento}
+
+A base de conhecimento do EcoLex RAG compreende 6 legislacoes ambientais brasileiras, segmentadas em 473 \textit{chunks} textuais e representadas por 1.714 triplets no Knowledge Graph. A Tabela~\ref{tab:legislacoes} detalha a composicao da base.
+
+\begin{table}[ht]
+\centering
+\caption{Legislacoes que compoem a base de conhecimento do EcoLex RAG.}
+\label{tab:legislacoes}
+\begin{tabular}{lcp{5cm}}
+\toprule
+\textbf{Legislacao} & \textbf{Tipo} & \textbf{Escopo Tematico} \\
+\midrule
+Codigo Florestal (Lei 12.651/2012) & Lei Federal & APP, Reserva Legal, supressao de vegetacao \\
+PNMA (Lei 6.938/1981) & Lei Federal & Politica Nacional do Meio Ambiente, SISNAMA, licenciamento \\
+SNUC (Lei 9.985/2000) & Lei Federal & Unidades de Conservacao, categorias de manejo \\
+Lei de Crimes Ambientais (Lei 9.605/1998) & Lei Federal & Sancoes penais e administrativas ambientais \\
+Resolucao CONAMA 357/2005 & Resolucao & Classificacao de corpos d'agua, padroes de qualidade \\
+Resolucao CONAMA 430/2011 & Resolucao & Condicoes e padroes de lancamento de efluentes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dataset de Avaliacao}
+
+O \textit{dataset} de avaliacao foi construido especificamente para este estudo, contendo 100 consultas em linguagem natural sobre as 6 legislacoes da base. Cada entrada do \textit{dataset} contem: (i) a pergunta em linguagem natural; (ii) a resposta de referencia com fundamentacao legal; (iii) a lei esperada nos resultados de recuperacao; (iv) o artigo esperado; (v) o nivel de complexidade; e (vi) a categoria tematica. A distribuicao por complexidade e legislacao e apresentada na Tabela~\ref{tab:dataset}.
+
+\begin{table}[ht]
+\centering
+\caption{Distribuicao do \textit{dataset} de avaliacao por complexidade e legislacao.}
+\label{tab:dataset}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Legislacao} & \textbf{Simples} & \textbf{Media} & \textbf{Complexa} & \textbf{Total} \\
+\midrule
+Codigo Florestal & 6 & 12 & 12 & 30 \\
+PNMA & 6 & 5 & 5 & 16 \\
+SNUC & 6 & 5 & 5 & 16 \\
+Crimes Ambientais & 10 & 3 & 3 & 16 \\
+CONAMA 357/2005 & 6 & 6 & 0 & 12 \\
+CONAMA 430/2011 & 6 & 4 & 0 & 10 \\
+\midrule
+\textbf{Total} & \textbf{40} & \textbf{35} & \textbf{25} & \textbf{100} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A preponderancia do Codigo Florestal (30 perguntas) reflete sua centralidade na pratica da gestao ambiental e sua maior complexidade estrutural (artigos com multiplos paragrafos, incisos e alineas). As consultas complexas concentram-se nas leis de maior interrelacao normativa (Codigo Florestal, PNMA, SNUC, Crimes Ambientais), enquanto as resolucoes CONAMA, de escopo mais restrito, sao cobertas por consultas simples e medias.
+
+\subsection{Configuracoes de Ablacao}
+
+O estudo de ablacao avalia 6 configuracoes que isolam e combinam progressivamente os componentes do pipeline, permitindo mensurar a contribuicao individual e sinergica de cada \textit{retriever}:
+
+\begin{enumerate}
+\item \textbf{BM25-only}: apenas recuperacao \textit{sparse} via BM25 Okapi;
+\item \textbf{Semantic-only}: apenas recuperacao \textit{dense} via Legal-BERTimbau + FAISS;
+\item \textbf{KG-only}: apenas recuperacao via Knowledge Graph legal;
+\item \textbf{BM25+Semantic}: fusao via RRF dos \textit{retrievers} BM25 e semantico (sem KG);
+\item \textbf{Hibrido fixo}: fusao via RRF dos tres \textit{retrievers} com parametros estaticos ($k = 10$, \textit{rewrites} $= 0$);
+\item \textbf{HyPA-RAG}: fusao via RRF dos tres \textit{retrievers} com parametros adaptativos (Tabela~\ref{tab:parametros}).
+\end{enumerate}
+
+As configuracoes 1--5 operam com $k = 10$ e 0 \textit{rewrites} em todas as consultas, enquanto a configuracao 6 (HyPA-RAG) adapta estes parametros conforme a complexidade. Todas utilizam o mesmo LLM (Mistral 7B FP16) e o mesmo \textit{prompt} de geracao.
+
+\subsection{Metricas de Avaliacao}
+
+Quatro metricas sao empregadas, abrangendo tanto a etapa de recuperacao quanto a de geracao:
+
+\begin{itemize}
+\item \textbf{Lei Retrieval Rate (LRR)}: fracao de consultas cujos resultados de recuperacao contem ao menos um \textit{chunk} da lei esperada;
+\item \textbf{Article Retrieval Rate (ARR)}: fracao de consultas cujos resultados contem o artigo especifico esperado;
+\item \textbf{Citation Law Rate (CLR)}: fracao de respostas geradas que citam corretamente a lei esperada no corpo textual;
+\item \textbf{Citation Article Rate (CAR)}: fracao de respostas que citam o artigo especifico esperado.
+\end{itemize}
+
+As duas primeiras metricas avaliam a qualidade do \textit{retriever}, enquanto as duas ultimas avaliam a qualidade \textit{end-to-end} do pipeline (recuperacao + geracao). Adicionalmente, reporta-se o numero medio de fontes (Fontes) e o tempo medio de resposta em segundos.
+
+\subsection{Ambiente de Hardware}
+
+Todos os experimentos foram conduzidos em uma estacao de trabalho equipada com GPU NVIDIA GeForce RTX 5090 (24 GB VRAM), processador Intel Core Ultra 9 275HX e 64 GB de RAM DDR5. O Mistral 7B Instruct v0.3 foi carregado em precisao FP16, ocupando aproximadamente 14 GB de VRAM. A avaliacao completa (600 execucoes: 100 consultas $\times$ 6 configuracoes) consumiu aproximadamente 4,6 horas (16.610 segundos).
+
+\section{Resultados e Discussao}
+
+\subsection{Resultados Gerais}
+
+A Tabela~\ref{tab:resultados_gerais} apresenta os resultados agregados das 6 configuracoes de ablacao sobre as 100 consultas do \textit{dataset}.
+
+\begin{table}[ht]
+\centering
+\caption{Resultados do estudo de ablacao (metricas agregadas sobre 100 consultas).}
+\label{tab:resultados_gerais}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Configuracao} & \textbf{Lei Ret.} & \textbf{Art. Ret.} & \textbf{Cit. Lei} & \textbf{Cit. Art.} & \textbf{Fontes} & \textbf{Tempo(s)} \\
+\midrule
+BM25-only & 65\% & 70\% & 63\% & 45\% & 10,0 & 26,2 \\
+Semantic-only & 61\% & 53\% & 61\% & 40\% & 10,0 & 24,6 \\
+KG-only & 56\% & 35\% & 58\% & 31\% & 10,0 & 20,3 \\
+BM25+Semantic & 65\% & 66\% & 65\% & 48\% & 10,0 & 27,6 \\
+Hibrido fixo & 65\% & 59\% & 66\% & 49\% & 10,0 & 23,8 \\
+\textbf{HyPA-RAG} & \textbf{65\%} & 56\% & 65\% & 48\% & \textbf{6,8} & 43,5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Resultados por Complexidade: Consultas Complexas}
+
+A Tabela~\ref{tab:complexas} apresenta o \textit{breakdown} de desempenho para as 25 consultas de complexidade alta, que envolvem raciocinio \textit{multi-hop}, comparacoes entre legislacoes e cenarios condicionais.
+
+\begin{table}[ht]
+\centering
+\caption{Desempenho nas 25 consultas complexas (\textit{multi-hop}, comparativas).}
+\label{tab:complexas}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuracao} & \textbf{Lei Ret.} & \textbf{Art. Ret.} & \textbf{Cit. Lei} & \textbf{Cit. Art.} \\
+\midrule
+BM25-only & 68\% & 60\% & 68\% & 40\% \\
+Semantic-only & 60\% & 48\% & 64\% & 44\% \\
+KG-only & 60\% & 20\% & 64\% & 36\% \\
+BM25+Semantic & 64\% & 52\% & 68\% & 52\% \\
+Hibrido fixo & 64\% & 36\% & 72\% & 48\% \\
+\textbf{HyPA-RAG} & 64\% & 52\% & 68\% & \textbf{52\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Resultados por Complexidade: Consultas Medias}
+
+A Tabela~\ref{tab:medias} apresenta os resultados para as 35 consultas de complexidade media, tipicamente envolvendo condicionais e artigos com paragrafos.
+
+\begin{table}[ht]
+\centering
+\caption{Desempenho nas 35 consultas de complexidade media (condicionais, paragrafos).}
+\label{tab:medias}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuracao} & \textbf{Lei Ret.} & \textbf{Art. Ret.} & \textbf{Cit. Lei} & \textbf{Cit. Art.} \\
+\midrule
+BM25-only & 66\% & 63\% & 63\% & 43\% \\
+Semantic-only & 60\% & 43\% & 60\% & 34\% \\
+KG-only & 57\% & 31\% & 54\% & 23\% \\
+BM25+Semantic & 66\% & 63\% & 66\% & 46\% \\
+Hibrido fixo & 66\% & 63\% & 66\% & 49\% \\
+\textbf{HyPA-RAG} & 66\% & 63\% & 63\% & \textbf{54\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Discussao}
+
+Os resultados do estudo de ablacao permitem extrair cinco constatacoes fundamentais sobre a dinamica dos componentes do EcoLex RAG.
+
+\textbf{Superioridade do BM25 para termos legais exatos.} A configuracao BM25-only alcanca o melhor Article Retrieval Rate global (70\%), superando em larga margem as abordagens Semantic-only (53\%) e KG-only (35\%). Este resultado e esperado e corrobora a literatura \cite{robertson:2009}: identificadores normativos como ``Art. 4\textsuperscript{o}'' e ``CONAMA 357'' sao tokens de alta especificidade cuja correspondencia lexica exata e mais eficaz do que a proximidade no espaco de \textit{embeddings}. A recuperacao \textit{dense}, por sua vez, captura relacoes semanticas uteis mas dilui a precisao ao trazer \textit{chunks} tematicamente proximos porem normativamente distintos.
+
+\textbf{Knowledge Graph isolado e limitado, mas contribui na fusao.} O KG-only apresenta o pior desempenho em todas as metricas (56\% LRR, 35\% ARR, 31\% CAR), evidenciando que a recuperacao puramente baseada em correspondencia de termos nos triplets e insuficiente para cobrir a diversidade lexica das consultas. Contudo, sua contribuicao na fusao tripla e perceptivel: o Hibrido fixo (BM25+Semantic+KG) alcanca Citation Law Rate de 66\%, superior aos 65\% do BM25+Semantic (sem KG), indicando que os triplets do KG adicionam informacao estrutural complementar que melhora a capacidade do LLM de citar legislacoes corretamente.
+
+\textbf{HyPA-RAG alcanca desempenho competitivo com significativa economia de fontes.} A constatacao central deste estudo reside na comparacao entre o HyPA-RAG e as configuracoes estaticas em termos de eficiencia. O HyPA-RAG atinge 65\% em Lei Retrieval e 48\% em Citation Article Rate -- valores competitivos com o Hibrido fixo (65\% e 49\%) e o BM25+Semantic (65\% e 48\%) -- utilizando em media apenas \textbf{6,8 fontes} contra 10,0 das demais configuracoes. Esta reducao de 32\% no numero de fontes traduz-se em: (i) menor consumo de tokens na janela de contexto do LLM; (ii) menor custo computacional de inferencia; e (iii) menor risco de diluicao da resposta por \textit{chunks} irrelevantes. A adaptacao parametrica permite que consultas simples ($k = 5$, 0 \textit{rewrites}) operem de forma leve, enquanto consultas complexas ($k = 15$, 3 \textit{rewrites}) recebem cobertura ampliada.
+
+\textbf{Empate em consultas complexas, superioridade em consultas medias.} Nas 25 consultas complexas (Tabela~\ref{tab:complexas}), o HyPA-RAG e o BM25+Semantic empatam em Citation Article Rate (52\%), ambos superando o Hibrido fixo (48\%). Este resultado sugere que, para consultas que exigem raciocinio \textit{multi-hop}, a combinacao de BM25 com recuperacao semantica e o fator determinante, e a inclusao do KG na fusao nao prejudica o desempenho quando os parametros sao adaptados. Nas 35 consultas medias (Tabela~\ref{tab:medias}), o HyPA-RAG atinge \textbf{54\% em Citation Article Rate}, superando todas as demais configuracoes -- incluindo o Hibrido fixo (49\%) e o BM25+Semantic (46\%). A reformulacao de consulta ($n = 1$ para complexidade media) e a calibracao de $k = 10$ emergem como a combinacao mais eficaz para este estrato de dificuldade, indicando que a adaptacao parametrica agrega maior valor precisamente no espectro intermediario de complexidade, onde nem os parametros minimos nem os maximos sao otimos.
+
+\textbf{Tradeoff entre tempo de resposta e adaptabilidade.} O HyPA-RAG apresenta o maior tempo medio de resposta (43,5s), contra 26,2s do BM25-only e 23,8s do Hibrido fixo. Este incremento e atribuivel ao custo computacional das reformulacoes de consulta via LLM (para consultas medias e complexas) e ao $k$ elevado em consultas complexas. Entretanto, dado que o cenario de uso primario e a consulta deliberativa por gestores ambientais -- e nao a interacao conversacional em tempo real --, um tempo de resposta na faixa de 40--50 segundos permanece aceitavel para o dominio de aplicacao.
+
+\subsection{Limitacoes}
+
+Os resultados apresentados devem ser interpretados a luz de tres limitacoes reconhecidas. Primeiramente, o \textit{dataset} de 100 consultas foi construido especificamente para este estudo e nao constitui um \textit{benchmark} padronizado da area, impedindo comparacoes diretas com outros sistemas. A construcao de \textit{benchmarks} publicos para RAG juridico em portugues permanece como lacuna relevante na comunidade. Em segundo lugar, a avaliacao empregou um unico LLM (Mistral 7B), e o desempenho do pipeline pode variar significativamente com modelos de diferentes capacidades (e.g., Llama 3, GPT-4). Terceiro, o classificador de complexidade opera exclusivamente sobre heuristicas linguisticas, sem treinamento supervisionado; um classificador aprendido poderia capturar padroes mais sutis de complexidade. Por fim, o corpus de 6 legislacoes, embora representativo dos marcos legais ambientais mais consultados, nao abrange a totalidade do arcabouco normativo (e.g., decretos regulamentadores, normativas estaduais, portarias do IBAMA).
+
+\section{Conclusao}
+
+Este trabalho apresentou o EcoLex RAG, um sistema HyPA-RAG adaptado ao dominio juridico-ambiental brasileiro que integra recuperacao tripla (BM25 + Legal-BERTimbau/FAISS + Knowledge Graph legal), fusao via Reciprocal Rank Fusion e adaptacao parametrica governada por um classificador de complexidade de consultas. O estudo de ablacao com 100 consultas sobre 6 legislacoes demonstrou que a adaptacao parametrica permite ao sistema manter desempenho competitivo em metricas de recuperacao e citacao enquanto opera com 32\% menos fontes do que configuracoes estaticas, evidenciando eficiencia superior na gestao da janela de contexto do LLM. O resultado mais expressivo concentrou-se no estrato de consultas de complexidade media, onde o HyPA-RAG alcancou 54\% em Citation Article Rate, superando todas as demais configuracoes.
+
+As contribuicoes deste trabalho estendem-se em tres direcoes: (i) a demonstracao empirica de que a adaptacao parametrica e uma estrategia viavel para otimizar sistemas RAG no dominio legal brasileiro; (ii) a validacao do Legal-BERTimbau como modelo de \textit{embedding} adequado para recuperacao semantica de trechos legislativos em portugues; e (iii) a proposta de um pipeline de geracao explicavel cuja estrutura de citacao obrigatoria (lei, artigo, paragrafo) alinha o sistema com os requisitos de transparencia e auditabilidade da administracao publica.
+
+No contexto pos-COP30, em que o Brasil assume compromissos climaticos que demandam governanca ambiental agil e tecnicamente fundamentada, ferramentas como o EcoLex RAG representam uma ponte necessaria entre o arcabouco normativo e a pratica administrativa. A capacidade de consultar legislacao ambiental em linguagem natural e receber respostas explicaveis, com citacao exata de dispositivos legais, tem potencial para democratizar o acesso a informacao juridica e qualificar o processo decisorio de gestores publicos em todos os niveis federativos.
+
+Como trabalhos futuros, destacam-se: (i) o \textit{fine-tuning} do LLM em corpora juridico-ambientais brasileiros, visando melhorar a qualidade das citacoes e a fidelidade ao texto legislativo; (ii) a expansao da base de conhecimento para incluir decretos regulamentadores, normativas estaduais e portarias do IBAMA e ICMBio; (iii) a substituicao do classificador heuristico por um modelo aprendido supervisionadamente; (iv) a avaliacao com multiplos LLMs (Llama 3, Sabia, GPT-4) para mensurar o impacto do modelo generativo no desempenho \textit{end-to-end}; e (v) a validacao do sistema com gestores ambientais em contexto operacional real, avaliando usabilidade, confianca nas respostas e impacto no tempo de tomada de decisao.
+
+\bibliographystyle{sbc}
+\bibliography{references}
+
+\end{document}
