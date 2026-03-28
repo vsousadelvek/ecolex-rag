@@ -61,11 +61,19 @@ class LLMService:
 
         logger.info("LLM carregado com sucesso")
 
-    def generate(self, question: str, context_chunks: list[dict]) -> str:
-        context = "\n\n---\n\n".join(
-            f"[{c.get('law_name', 'N/A')} | {c.get('article', 'N/A')}]\n{c['content']}"
-            for c in context_chunks
-        )
+    def generate(self, question: str, context_chunks: list[dict], max_context_tokens: int = 3000) -> str:
+        # Limitar contexto para caber na VRAM (24GB RTX 5090)
+        chunks_text = []
+        total_tokens = 0
+        for c in context_chunks:
+            chunk_str = f"[{c.get('law_name', 'N/A')} | {c.get('article', 'N/A')}]\n{c['content'][:800]}"
+            est_tokens = len(chunk_str.split()) * 1.3
+            if total_tokens + est_tokens > max_context_tokens:
+                break
+            chunks_text.append(chunk_str)
+            total_tokens += est_tokens
+
+        context = "\n\n---\n\n".join(chunks_text)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
