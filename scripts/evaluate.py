@@ -24,70 +24,11 @@ from app.services.knowledge_graph import kg_service
 from app.services.llm import llm_service
 from app.services.retriever import bm25_service
 from app.services.rag_pipeline import rag_pipeline
+from scripts.eval_dataset import EVAL_DATASET_FULL
 
-# Dataset de avaliação: perguntas sobre legislação ambiental brasileira
-EVAL_DATASET = [
-    {
-        "question": "Qual a largura mínima da faixa de APP para rios com menos de 10 metros de largura?",
-        "ground_truth": "A faixa mínima de Área de Preservação Permanente para cursos d'água com menos de 10 metros de largura é de 30 metros, conforme Art. 4º, inciso I, alínea 'a' do Código Florestal (Lei 12.651/2012).",
-        "expected_law": "Código Florestal",
-        "expected_article": "Art. 4",
-    },
-    {
-        "question": "O que é Reserva Legal e qual o percentual exigido na Amazônia Legal?",
-        "ground_truth": "Reserva Legal é a área no interior de uma propriedade rural com a função de assegurar o uso econômico sustentável dos recursos naturais. Na Amazônia Legal, o percentual mínimo é de 80% para imóveis em área de floresta, conforme Art. 12, inciso I, alínea 'a' do Código Florestal.",
-        "expected_law": "Código Florestal",
-        "expected_article": "Art. 12",
-    },
-    {
-        "question": "Quais são os instrumentos da Política Nacional do Meio Ambiente?",
-        "ground_truth": "Os instrumentos incluem: estabelecimento de padrões de qualidade ambiental, zoneamento ambiental, avaliação de impactos ambientais, licenciamento ambiental, entre outros, conforme Art. 9º da Lei 6.938/1981.",
-        "expected_law": "PNMA",
-        "expected_article": "Art. 9",
-    },
-    {
-        "question": "Qual a pena para quem desmata área de preservação permanente?",
-        "ground_truth": "Destruir ou danificar floresta em área de preservação permanente, mesmo que em formação, ou utilizá-la com infringência das normas de proteção, sujeita o infrator a detenção de 1 a 3 anos, ou multa, ou ambas, conforme Art. 38 da Lei 9.605/1998.",
-        "expected_law": "Crimes Ambientais",
-        "expected_article": "Art. 38",
-    },
-    {
-        "question": "O que é uma Unidade de Conservação de Proteção Integral segundo o SNUC?",
-        "ground_truth": "O objetivo básico das Unidades de Proteção Integral é preservar a natureza, sendo admitido apenas o uso indireto dos seus recursos naturais, conforme Art. 7º, §1º da Lei 9.985/2000. Compreendem: Estação Ecológica, Reserva Biológica, Parque Nacional, Monumento Natural e Refúgio de Vida Silvestre.",
-        "expected_law": "SNUC",
-        "expected_article": "Art. 7",
-    },
-    {
-        "question": "Quais são as classes de qualidade de água doce definidas pela Resolução CONAMA 357?",
-        "ground_truth": "As águas doces são classificadas em: Classe Especial, Classe 1, Classe 2, Classe 3 e Classe 4, conforme Art. 4º da Resolução CONAMA 357/2005, cada uma com usos preponderantes específicos.",
-        "expected_law": "CONAMA 357",
-        "expected_article": "Art. 4",
-    },
-    {
-        "question": "Em que situações o Código Florestal permite a supressão de vegetação em APP?",
-        "ground_truth": "A supressão de vegetação nativa em APP somente poderá ser autorizada em casos de utilidade pública, interesse social ou de baixo impacto ambiental, conforme Art. 8º do Código Florestal (Lei 12.651/2012).",
-        "expected_law": "Código Florestal",
-        "expected_article": "Art. 8",
-    },
-    {
-        "question": "Qual a composição e função do CONAMA segundo a Política Nacional do Meio Ambiente?",
-        "ground_truth": "O CONAMA é o órgão consultivo e deliberativo do SISNAMA, com a finalidade de assessorar, estudar e propor diretrizes de políticas governamentais para o meio ambiente, conforme Art. 6º, inciso II da Lei 6.938/1981.",
-        "expected_law": "PNMA",
-        "expected_article": "Art. 6",
-    },
-    {
-        "question": "Qual a faixa de APP ao redor de nascentes e olhos d'água perenes?",
-        "ground_truth": "As áreas no entorno das nascentes e dos olhos d'água perenes, qualquer que seja sua situação topográfica, devem ter raio mínimo de 50 metros, conforme Art. 4º, inciso IV do Código Florestal.",
-        "expected_law": "Código Florestal",
-        "expected_article": "Art. 4",
-    },
-    {
-        "question": "Considere uma propriedade rural na Amazônia Legal com área de floresta e que também faz divisa com um rio de 50 metros de largura. Quais são as exigências cumulativas de APP e Reserva Legal?",
-        "ground_truth": "A propriedade deve manter APP de 100 metros nas faixas marginais do rio (Art. 4º, I, 'c' do Código Florestal, para rios de 50 a 200m de largura) e Reserva Legal de 80% da área do imóvel (Art. 12, I, 'a'). A APP não compõe a Reserva Legal, salvo exceções do Art. 15.",
-        "expected_law": "Código Florestal",
-        "expected_article": "Art. 4",
-    },
-]
+# Usa o dataset completo de 50 perguntas
+EVAL_DATASET = EVAL_DATASET_FULL
+
 
 
 def evaluate():
